@@ -3,13 +3,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# Function to process the data and calculate adjustments
+# Function to process data and calculate adjustments
 def calculate_adjustments(df):
+    # Standardize column names (strip spaces and ensure consistency)
+    df.columns = df.columns.str.strip()
+
+    # Print available columns for debugging
+    st.write("Available columns in DataFrame:", df.columns.tolist())
+
     # Convert date columns to datetime format
     date_columns = ["List Date", "Close Date", "Withdrawn Date", "Expiration Date"]
     for col in date_columns:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
+
+    # Ensure Market Trend (%) exists
+    if "Market Trend (%)" not in df.columns:
+        st.warning("⚠️ 'Market Trend (%)' column not found. Using default value of 7.0%.")
+        df["Market Trend (%)"] = 7.0  # Default market trend (modify if needed)
 
     # Calculate Days on Market (DOM)
     df["Days on Market"] = (df["Close Date"] - df["List Date"]).dt.days
@@ -23,14 +34,10 @@ def calculate_adjustments(df):
         df["Price Change (%)"] = 0  # Default if no SP/LP data
 
     # Calculate market condition adjustments
-    if "Market Trend (%)" in df.columns:
-        df["Adjustment (%)"] = df["Market Trend (%)"] - df["Price Change (%)"]
-        df["Adjustment Type"] = df["Adjustment (%)"].apply(
-            lambda x: "Upward" if x > 0 else "Downward" if x < 0 else "None"
-        )
-    else:
-        df["Adjustment (%)"] = 0
-        df["Adjustment Type"] = "None"
+    df["Adjustment (%)"] = df["Market Trend (%)"] - df["Price Change (%)"]
+    df["Adjustment Type"] = df["Adjustment (%)"].apply(
+        lambda x: "Upward" if x > 0 else "Downward" if x < 0 else "None"
+    )
 
     # Calculate Final Adjusted Price
     df["Final Adjusted Price"] = df["Close Price"] * (1 + df["Adjustment (%)"] / 100)
@@ -44,7 +51,7 @@ def calculate_adjustments(df):
     return df
 
 # Streamlit UI
-st.title("Real Estate Market Condition Adjustment Tool")
+st.title("📊 Real Estate Market Condition Adjustment Tool")
 st.write("Upload a CSV file containing comparable sales data to analyze market trends and adjustments.")
 
 # File uploader
@@ -56,32 +63,36 @@ if uploaded_file:
     df_adjusted = calculate_adjustments(df)
 
     # Display Data
-    st.subheader("Preview of Adjusted Data")
+    st.subheader("📄 Preview of Adjusted Data")
     st.dataframe(df_adjusted.head())
 
     # Download Button
-    st.download_button(label="Download Adjusted CSV",
+    st.download_button(label="📥 Download Adjusted CSV",
                        data=df_adjusted.to_csv(index=False),
                        file_name="adjusted_comparables.csv",
                        mime="text/csv")
 
     # Graphs
-    st.subheader("Market Trends & Adjustments")
+    st.subheader("📊 Market Trends & Adjustments")
 
     # Days on Market Distribution
-    fig, ax = plt.subplots()
-    sns.histplot(df_adjusted["Days on Market"].dropna(), bins=20, kde=True, ax=ax)
-    ax.set_title("Distribution of Days on Market")
-    st.pyplot(fig)
+    if "Days on Market" in df_adjusted.columns:
+        fig, ax = plt.subplots()
+        sns.histplot(df_adjusted["Days on Market"].dropna(), bins=20, kde=True, ax=ax)
+        ax.set_title("Distribution of Days on Market")
+        st.pyplot(fig)
 
     # Sale Price Adjustments
-    fig, ax = plt.subplots()
-    sns.boxplot(x="Listing Outcome", y="Final Adjusted Price", data=df_adjusted, ax=ax)
-    ax.set_title("Final Adjusted Price by Listing Outcome")
-    st.pyplot(fig)
+    if "Final Adjusted Price" in df_adjusted.columns and "Listing Outcome" in df_adjusted.columns:
+        fig, ax = plt.subplots()
+        sns.boxplot(x="Listing Outcome", y="Final Adjusted Price", data=df_adjusted, ax=ax)
+        ax.set_title("Final Adjusted Price by Listing Outcome")
+        st.pyplot(fig)
 
     # Price Change vs Market Trend
-    fig, ax = plt.subplots()
-    sns.scatterplot(x=df_adjusted["Price Change (%)"], y=df_adjusted["Market Trend (%)"], hue=df_adjusted["Adjustment Type"], ax=ax)
-    ax.set_title("Price Change vs Market Trend")
-    st.pyplot(fig)
+    if "Price Change (%)" in df_adjusted.columns and "Market Trend (%)" in df_adjusted.columns:
+        fig, ax = plt.subplots()
+        sns.scatterplot(x=df_adjusted["Price Change (%)"], y=df_adjusted["Market Trend (%)"], hue=df_adjusted["Adjustment Type"], ax=ax)
+        ax.set_title("Price Change vs Market Trend")
+        st.pyplot(fig)
+
