@@ -1,133 +1,168 @@
-import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import streamlit as st
+from fpdf import FPDF
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
 
-# Property characteristic adjustment values (Modify based on market data)
-ADJUSTMENTS = {
-    "Lot Size (SF)": 1.50,  # $1.50 per sq ft
-    "Living Area (SF)": 50, # $50 per sq ft
-    "Bathroom Count": 5000, # $5000 per bathroom
-    "Garage Spaces": 3000,  # $3000 per garage space
-    "Pool": 10000,          # $10,000 for having a pool
-    "Basement": 8000,       # $8,000 for having a basement
-    "View": {"Good": 15000, "Fair": 5000, "Poor": 0}  # Adjust based on view quality
-}
+# Load and clean data
+def load_data(file_path):
+    data = pd.read_csv(file_path)
+    return data
 
-def process_data(df, subject_property):
+def clean_data(data):
+    data.dropna(subset=['Close Price', 'SqFt', 'Bedrooms', 'Baths Total'], inplace=True)
+    data['Close Date'] = pd.to_datetime(data['Close Date'])
+    data['List Date'] = pd.to_datetime(data['List Date'])
+    data['Year Built'] = pd.to_numeric(data['Year Built'], errors='coerce')
+    data['PricePerSqFt'] = data['Close Price'] / data['SqFt']
+    data['DOM'] = pd.to_numeric(data['DOM'], errors='coerce')
+    data['SP/LP Ratio'] = data['Close Price'] / data['List Price']
+    return data
+
+# Analyze data
+def analyze_data(data):
+    analysis = {}
+    analysis['avg_close_price'] = data['Close Price'].mean()
+    analysis['median_close_price'] = data['Close Price'].median()
+    analysis['avg_price_per_sqft'] = data['PricePerSqFt'].mean()
+    analysis['median_dom'] = data['DOM'].median()
+    data['Close Month'] = data['Close Date'].dt.to_period('M')
+    monthly_trends = data.groupby('Close Month')['Close Price'].mean().reset_index()
+    property_type_dist = data['Property Type'].value_counts().reset_index()
+    property_type_dist.columns = ['Property Type', 'Count']
+    return analysis, monthly_trends, property_type_dist
+
+# Create charts
+def create_charts(data, monthly_trends, property_type_dist):
+    plt.figure(figsize=(10, 6))
+    sns.histplot(data['Close Price'], bins=30, kde=True)
+    plt.title('Distribution of Close Prices')
+    plt.xlabel('Close Price')
+    plt.ylabel('Frequency')
+    st.pyplot(plt)
+    
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(x=monthly_trends['Close Month'].astype(str), y=monthly_trends['Close Price'])
+    plt.title('Monthly Average Close Price')
+    plt.xlabel('Month')
+    plt.ylabel('Average Close Price')
+    plt.xticks(rotation=45)
+    st.pyplot(plt)
+    
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x='Property Type', y='Count', data=property_type_dist)
+    plt.title('Property Type Distribution')
+    plt.xlabel('Property Type')
+    plt.ylabel('Count')
+    plt.xticks(rotation=45)
+    st.pyplot(plt)
+
+# Generate commentary
+def generate_commentary(analysis):
+    commentary = f"""
+    Market Analysis Report:
+    - The average close price in the area is ${analysis['avg_close_price']:,.2f}.
+    - The median close price is ${analysis['median_close_price']:,.2f}.
+    - The average price per square foot is ${analysis['avg_price_per_sqft']:,.2f}.
+    - The median days on market (DOM) is {analysis['median_dom']:.0f} days.
     """
-    Process the CSV data and apply both market condition & property characteristic adjustments.
-    """
+    return commentary
 
-    # Standardize column names (strip spaces and ensure consistency)
-    df.columns = df.columns.str.strip()
+# Export report
+def export_report(analysis, data, monthly_trends, property_type_dist):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Market Analysis Report", ln=True, align="C")
+    pdf.multi_cell(0, 10, txt=generate_commentary(analysis))
+    pdf.cell(200, 10, txt="Filtered Data", ln=True, align="C")
+    pdf.multi_cell(0, 10, txt=data.head().to_string())
+    create_charts(data, monthly_trends, property_type_dist)
+    plt.savefig('charts.png')
+    pdf.image('charts.png', x=10, y=None, w=180)
+    pdf.output("market_analysis_report.pdf")
 
-    # Print available columns for debugging
-    st.write("Available columns in DataFrame:", df.columns.tolist())
+# Regression model
+def predict_price(data):
+    features = ['SqFt', 'Bedrooms', 'Baths Total']
+    X = data[features]
+    y = data['Close Price']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    return model, y_pred, y_test
 
-    # Convert date columns
-    date_columns = ["List Date", "Close Date", "Withdrawn Date", "Expiration Date"]
-    for col in date_columns:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
+# Streamlit app
+st.title('Real Estate Market Analysis App')
+uploaded_file = st.file_uploader("Upload MLS Data (CSV)", type="csv")
 
-    # Ensure Market Trend (%) exists
-    if "Market Trend (%)" not in df.columns:
-        st.warning("⚠️ 'Market Trend (%)' column not found. Using default value of 7.0%.")
-        df["Market Trend (%)"] = 7.0  # Default market trend
-
-    # Calculate Days on Market
-    df["Days on Market"] = (df["Close Date"] - df["List Date"]).dt.days
-
-    # Calculate price change percentage using SP/LP Ratio
-    if "SP/LP Ratio" in df.columns:
-        df["Price Change (%)"] = (df["SP/LP Ratio"] - 1) * 100
-    else:
-        df["Price Change (%)"] = 0  # Default if no SP/LP data
-
-    # Market Condition Adjustments
-    df["Market Adjustment (%)"] = df["Market Trend (%)"] - df["Price Change (%)"]
-    df["Market Adjustment Type"] = df["Market Adjustment (%)"].apply(
-        lambda x: "Upward" if x > 0 else "Downward" if x < 0 else "None"
-    )
-    df["Price After Market Adjustment"] = df["Close Price"] * (1 + df["Market Adjustment (%)"] / 100)
-
-    # Property Characteristic Adjustments
-    for feature, value in ADJUSTMENTS.items():
-        if feature in df.columns:
-            if feature in ["View"]:  
-                # View quality adjustments
-                df["Adjustment for " + feature] = df[feature].apply(lambda x: ADJUSTMENTS["View"].get(x, 0)) - ADJUSTMENTS["View"].get(subject_property[feature], 0)
-            else:
-                df["Adjustment for " + feature] = (df[feature] - subject_property[feature]) * value
-
-    # Sum all adjustments
-    adjustment_columns = [col for col in df.columns if col.startswith("Adjustment for")]
-    df["Total Adjustments"] = df[adjustment_columns].sum(axis=1)
-    df["Final Adjusted Price"] = df["Price After Market Adjustment"] + df["Total Adjustments"]
-
-    return df
-
-# Streamlit UI
-st.title("🏡 Comprehensive Real Estate Appraisal Tool")
-st.write("Upload a CSV file with comparable sales, enter subject property details, and calculate adjustments.")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-
-    # Get Subject Property Details
-    st.subheader("Enter Subject Property Characteristics")
-
-    subject_property = {
-        "Lot Size (SF)": st.number_input("Lot Size (SF)", min_value=0, value=7000),
-        "Living Area (SF)": st.number_input("Living Area (SF)", min_value=500, value=2000),
-        "Bathroom Count": st.number_input("Bathroom Count", min_value=1, value=2),
-        "Garage Spaces": st.number_input("Garage Spaces", min_value=0, value=2),
-        "Pool": st.radio("Pool", ["Yes", "No"]),
-        "Basement": st.radio("Basement", ["Yes", "No"]),
-        "View": st.selectbox("View Quality", ["Good", "Fair", "Poor"])
-    }
-
-    # Convert Pool/Basement Yes/No to numeric values
-    subject_property["Pool"] = 1 if subject_property["Pool"] == "Yes" else 0
-    subject_property["Basement"] = 1 if subject_property["Basement"] == "Yes" else 0
-
-    # Process Data
-    df_adjusted = process_data(df, subject_property)
-
-    # Display Data
-    st.subheader("📄 Adjusted Comparables Data")
-    st.dataframe(df_adjusted.head())
-
-    # Download Button
-    st.download_button(label="📥 Download Adjusted CSV",
-                       data=df_adjusted.to_csv(index=False),
-                       file_name="combined_adjusted_comparables.csv",
-                       mime="text/csv")
-
-    # Graphs
-    st.subheader("📊 Visualization of Adjustments")
-
-    # Days on Market Distribution
-    if "Days on Market" in df_adjusted.columns:
-        fig, ax = plt.subplots()
-        sns.histplot(df_adjusted["Days on Market"].dropna(), bins=20, kde=True, ax=ax)
-        ax.set_title("Distribution of Days on Market")
-        st.pyplot(fig)
-
-    # Final Adjusted Prices
-    if "Final Adjusted Price" in df_adjusted.columns:
-        fig, ax = plt.subplots()
-        sns.boxplot(x="Final Adjusted Price", data=df_adjusted, ax=ax)
-        ax.set_title("Final Adjusted Price Distribution")
-        st.pyplot(fig)
-
-    # Market Adjustments vs Characteristic Adjustments
-    if "Market Adjustment (%)" in df_adjusted.columns:
-        fig, ax = plt.subplots()
-        sns.scatterplot(x=df_adjusted["Market Adjustment (%)"], y=df_adjusted["Total Adjustments"], hue=df_adjusted["Market Adjustment Type"], ax=ax)
-        ax.set_title("Market Adjustment vs. Property Adjustments")
-        st.pyplot(fig)
-
+if uploaded_file is not None:
+    data = load_data(uploaded_file)
+    data = clean_data(data)
+    
+    # Filters
+    st.sidebar.subheader('Filters')
+    city_filter = st.sidebar.selectbox('City/Location', ['All'] + list(data['City/Location'].unique()))
+    if city_filter != 'All':
+        data = data[data['City/Location'] == city_filter]
+    bedrooms_filter = st.sidebar.slider('Bedrooms', min_value=int(data['Bedrooms'].min()), max_value=int(data['Bedrooms'].max()))
+    data = data[data['Bedrooms'] >= bedrooms_filter]
+    baths_filter = st.sidebar.slider('Baths Total', min_value=int(data['Baths Total'].min()), max_value=int(data['Baths Total'].max()))
+    data = data[data['Baths Total'] >= baths_filter]
+    year_filter = st.sidebar.slider('Year Built', min_value=int(data['Year Built'].min()), max_value=int(data['Year Built'].max()))
+    data = data[data['Year Built'] >= year_filter]
+    
+    # Analyze data
+    analysis, monthly_trends, property_type_dist = analyze_data(data)
+    
+    # Display analysis
+    st.subheader('Market Analysis')
+    st.write(generate_commentary(analysis))
+    
+    # Display filtered data
+    st.subheader('Filtered Data')
+    st.write(data.head())
+    
+    # Display charts
+    st.subheader('Charts')
+    create_charts(data, monthly_trends, property_type_dist)
+    
+    # Comparisons
+    st.sidebar.subheader('Comparisons')
+    subdivision_comparison = st.sidebar.multiselect('Compare by Subdivision', data['Subdivision'].unique())
+    if subdivision_comparison:
+        comparison_data = data[data['Subdivision'].isin(subdivision_comparison)]
+        st.subheader('Comparison by Subdivision')
+        st.write(comparison_data.groupby('Subdivision')['Close Price'].mean().reset_index())
+    
+    school_comparison = st.sidebar.multiselect('Compare by School District', data['School District'].unique())
+    if school_comparison:
+        comparison_data = data[data['School District'].isin(school_comparison)]
+        st.subheader('Comparison by School District')
+        st.write(comparison_data.groupby('School District')['Close Price'].mean().reset_index())
+    
+    property_type_comparison = st.sidebar.multiselect('Compare by Property Type', data['Property Type'].unique())
+    if property_type_comparison:
+        comparison_data = data[data['Property Type'].isin(property_type_comparison)]
+        st.subheader('Comparison by Property Type')
+        st.write(comparison_data.groupby('Property Type')['Close Price'].mean().reset_index())
+    
+    # Export report
+    if st.button('Export Report as PDF'):
+        export_report(analysis, data, monthly_trends, property_type_dist)
+        st.success('Report exported as PDF!')
+    
+    # Advanced analysis
+    if st.checkbox('Show Advanced Analysis (Regression Model)'):
+        model, y_pred, y_test = predict_price(data)
+        st.subheader('Regression Model Results')
+        st.write(f"Model R-squared: {model.score(X_test, y_test):.2f}")
+        plt.figure(figsize=(10, 6))
+        sns.scatterplot(x=y_test, y=y_pred)
+        plt.xlabel('Actual Prices')
+        plt.ylabel('Predicted Prices')
+        plt.title('Actual vs Predicted Prices')
+        st.pyplot(plt)
